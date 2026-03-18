@@ -4,9 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 BASE = Path("/content")
-JPEG_QUALITY = 50
-NOISE_STD = 25
-FILTER_KERNEL = (3, 3)
+JPEG_QUALITY = 10
+NOISE_STD = 80
+FILTER_KERNEL = (11, 11)
 
 
 def load_images():
@@ -32,7 +32,7 @@ def jpeg_degrade(image, quality=JPEG_QUALITY):
 def apply_filters(image):
     return {
         "vidējais filtrs":  cv2.blur(image, FILTER_KERNEL),
-        "mediānas filtrs":  cv2.medianBlur(image, 3),
+        "mediānas filtrs":  cv2.medianBlur(image, 11),
         "gausa filtrs":     cv2.GaussianBlur(image, FILTER_KERNEL, 0),
     }
 
