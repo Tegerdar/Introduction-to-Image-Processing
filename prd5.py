@@ -9,9 +9,9 @@ import numpy as np
 try:
     from google.colab.patches import cv2_imshow  # type: ignore
 except Exception:
-    def cv2_imshow(attels):
+    def cv2_imshow(image):
         """Fallback for non-Colab environments."""
-        print("cv2_imshow pieejams tikai Colab vidē.")
+        print("cv2_imshow pieejama tikai Colab vidē.")
 
 KONFIGURACIJA = {
     "img1.png": {
@@ -136,7 +136,7 @@ def audzesana(
     """
     h, w = attels.shape
     maska = np.zeros((h, w), dtype=np.uint8)
-    apmeklets = np.zeros((h, w), dtype=np.uint8)
+    apmeklets = np.zeros((h, w), dtype=bool)
     tolerance = max(1, int(tolerance))
     if max_pixels is not None:
         max_pixels = max(1, int(max_pixels))
@@ -150,7 +150,7 @@ def audzesana(
 
         sakuma_verts = int(attels[sy, sx])
         rinda = deque([(sy, sx)])
-        apmeklets[sy, sx] = 1
+        apmeklets[sy, sx] = True
         maska[sy, sx] = 255
         kopejais += 1
         summas = sakuma_verts
@@ -160,11 +160,11 @@ def audzesana(
             if max_pixels is not None and kopejais >= max_pixels:
                 break
             y, x = rinda.popleft()
-            region_mean = summas / pikselu_skaits
+            region_mean = int(round(summas / pikselu_skaits))
             for dy, dx in KAIMINI_8:
                 ny, nx = y + dy, x + dx
                 if 0 <= ny < h and 0 <= nx < w and not apmeklets[ny, nx]:
-                    apmeklets[ny, nx] = 1
+                    apmeklets[ny, nx] = True
                     if abs(int(attels[ny, nx]) - region_mean) <= tolerance:
                         pikselis = int(attels[ny, nx])
                         summas += pikselis
@@ -189,11 +189,12 @@ def notirit_mazus_rezultatus(maska: np.ndarray, min_area: int = 100) -> np.ndarr
 def izveidot_overlay(originals: np.ndarray, maska: np.ndarray) -> np.ndarray:
     """Pārklāj segmentācijas masku uz oriģinālā attēla."""
     if originals.ndim == 2:
-        overlay = cv2.cvtColor(originals, cv2.COLOR_GRAY2BGR)
+        bgr = cv2.cvtColor(originals, cv2.COLOR_GRAY2BGR)
     else:
-        overlay = originals.copy()
+        bgr = originals.copy()
+    overlay = bgr.copy()
     overlay[maska > 0] = (0, 0, 255)
-    return cv2.addWeighted(originals if originals.ndim == 3 else cv2.cvtColor(originals, cv2.COLOR_GRAY2BGR), 0.7, overlay, 0.3, 0)
+    return cv2.addWeighted(bgr, 0.7, overlay, 0.3, 0)
 
 
 def main() -> None:
@@ -204,7 +205,10 @@ def main() -> None:
         originals = cv2.imread(faila_nosaukums)
         attels = cv2.imread(faila_nosaukums, cv2.IMREAD_GRAYSCALE)
         if originals is None or attels is None:
-            print(f"Nevar ielādēt failu: {faila_nosaukums}")
+            if not os.path.exists(faila_nosaukums):
+                print(f"Fails nav atrasts: {faila_nosaukums}")
+            else:
+                print(f"Nevar nolasīt failu kā attēlu: {faila_nosaukums}")
             continue
 
         auto_cfg = auto_parametri(attels)
@@ -221,13 +225,13 @@ def main() -> None:
             audzesana(attels, seklas, merged_cfg["tolerance"], merged_cfg.get("max_pixels"))
         )
 
-        bāze = os.path.splitext(os.path.basename(faila_nosaukums))[0]
+        baze = os.path.splitext(os.path.basename(faila_nosaukums))[0]
         overlay = izveidot_overlay(originals, rez_audzesana)
 
-        cv2.imwrite(os.path.join(out_dir, f"{bāze}_original.png"), originals)
-        cv2.imwrite(os.path.join(out_dir, f"{bāze}_threshold.png"), rez_slieksnis)
-        cv2.imwrite(os.path.join(out_dir, f"{bāze}_region.png"), rez_audzesana)
-        cv2.imwrite(os.path.join(out_dir, f"{bāze}_overlay.png"), overlay)
+        cv2.imwrite(os.path.join(out_dir, f"{baze}_original.png"), originals)
+        cv2.imwrite(os.path.join(out_dir, f"{baze}_threshold.png"), rez_slieksnis)
+        cv2.imwrite(os.path.join(out_dir, f"{baze}_region.png"), rez_audzesana)
+        cv2.imwrite(os.path.join(out_dir, f"{baze}_overlay.png"), overlay)
 
         cv2_imshow(originals)
         cv2_imshow(rez_slieksnis)
