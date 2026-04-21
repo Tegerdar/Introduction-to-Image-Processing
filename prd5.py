@@ -23,7 +23,9 @@ KONFIGURACIJA = {
         "seklas": None,
         "n_seklas": 8,
         "max_pixels": None,
+        # Morfoloģiskās tīrīšanas kodola izmērs pēc sliekšņošanas.
         "morph_kernel": 3,
+        # Minimālais kontūras laukums automātiskām sēklām.
         "seed_min_area": 200,
     },
     "img2": {
@@ -34,6 +36,7 @@ KONFIGURACIJA = {
         "seklas": None,
         "n_seklas": 4,
         "max_pixels": None,
+        "use_clahe": False,
     },
     "img3": {
         "file_candidates": ["img3.png"],
@@ -43,7 +46,9 @@ KONFIGURACIJA = {
         "seklas": None,
         "n_seklas": 6,
         "max_pixels": None,
+        # Morfoloģiskās tīrīšanas kodola izmērs pēc sliekšņošanas.
         "morph_kernel": 3,
+        # Minimālais kontūras laukums automātiskām sēklām.
         "seed_min_area": 150,
     },
 }
@@ -213,18 +218,19 @@ def izveidot_overlay(originals: np.ndarray, maska: np.ndarray) -> np.ndarray:
 
 
 def atrast_attela_celu(base_dir: str, kandidati: list[str]) -> str | None:
+    """Atrod attēla ceļu: vispirms precīzs kandidāts, pēc tam fallback ar glob."""
     for nosaukums in kandidati:
-        cela = os.path.join(base_dir, nosaukums)
-        if os.path.isfile(cela):
-            return cela
+        faila_cels = os.path.join(base_dir, nosaukums)
+        if os.path.isfile(faila_cels):
+            return faila_cels
 
     for nosaukums in kandidati:
         if os.path.splitext(nosaukums)[1]:
             continue
         rezultati = sorted(glob(os.path.join(base_dir, f"{nosaukums}*")))
-        for cela in rezultati:
-            if os.path.isfile(cela):
-                return cela
+        for faila_cels in rezultati:
+            if os.path.isfile(faila_cels):
+                return faila_cels
     return None
 
 
