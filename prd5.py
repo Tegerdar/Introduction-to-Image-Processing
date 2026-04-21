@@ -97,8 +97,9 @@ def slieksnosana(attels: np.ndarray, cfg: dict) -> np.ndarray:
     if cfg.get("use_clahe", True):
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         attels = clahe.apply(attels)
-    if cfg.get("median_blur", 3):
-        blur_ksize = validet_bloka_izmeru(cfg.get("median_blur", 3), h, w)
+    median_blur = cfg.get("median_blur", 3)
+    if median_blur is not None:
+        blur_ksize = validet_bloka_izmeru(median_blur, h, w)
         attels = cv2.medianBlur(attels, blur_ksize)
 
     bs = validet_bloka_izmeru(cfg["block_size"], h, w)
