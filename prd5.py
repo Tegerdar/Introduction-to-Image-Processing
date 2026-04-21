@@ -1,291 +1,106 @@
-from __future__ import annotations
-
-import os
-from collections import deque
-from glob import glob
-
 import cv2
 import numpy as np
+from collections import deque
+import os
+from google.colab.patches import cv2_imshow
 
-try:
-    from google.colab.patches import cv2_imshow  # type: ignore
-except Exception:
-    def cv2_imshow(image):
-        """Fallback for non-Colab environments."""
-        print("cv2_imshow pieejama tikai Colab vidē.")
+INTENSITY_THRESHOLD = 15
+GRID_SPACING        = 30
+OUTPUT_DIR          = "output"
+TEST_IMAGES = [
+    "img1.png",
+    "img2.png",
+    "img3.png",
+]
 
-KONFIGURACIJA = {
-    "img1": {
-        "file_candidates": ["img1.png", "img1 (1).png"],
-        "block_size": 81,
-        "C": 8,
-        "tolerance": 12,
-        "seklas": None,
-        "n_seklas": 8,
-        "max_pixels": None,
-        # Morfoloģiskās tīrīšanas kodola izmērs pēc sliekšņošanas.
-        "morph_kernel": 3,
-        # Minimālais kontūras laukums automātiskām sēklām.
-        "seed_min_area": 200,
-        "median_blur": 3,
-    },
-    "img2": {
-        "file_candidates": ["img2.png"],
-        "block_size": None,
-        "C": None,
-        "tolerance": None,
-        "seklas": None,
-        "n_seklas": 4,
-        "max_pixels": None,
-        "use_clahe": False,
-        "median_blur": 3,
-    },
-    "img3": {
-        "file_candidates": ["img3.png"],
-        "block_size": 61,
-        "C": 7,
-        "tolerance": 10,
-        "seklas": None,
-        "n_seklas": 6,
-        "max_pixels": None,
-        # Morfoloģiskās tīrīšanas kodola izmērs pēc sliekšņošanas.
-        "morph_kernel": 3,
-        # Minimālais kontūras laukums automātiskām sēklām.
-        "seed_min_area": 150,
-        "median_blur": 3,
-    },
-}
+def generate_seeds(height: int, width: int, spacing: int) -> list[tuple[int, int]]:
+    seeds = []
+    for r in range(spacing // 2, height, spacing):
+        for c in range(spacing // 2, width, spacing):
+            seeds.append((r, c))
+    return seeds
 
+def region_growing(gray: np.ndarray, seeds: list[tuple[int, int]], threshold: int) -> np.ndarray:
+    h, w = gray.shape
+    label_map = np.zeros((h, w), dtype=np.int32)
+    neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
-KAIMINI_8 = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
+    region_id = 0
+    for seed_r, seed_c in seeds:
+        if label_map[seed_r, seed_c] != 0:
+            continue
 
+        region_id += 1
+        seed_intensity = int(gray[seed_r, seed_c])
+        queue = deque()
+        queue.append((seed_r, seed_c))
+        label_map[seed_r, seed_c] = region_id
 
-def validet_bloka_izmeru(bs: int, h: int, w: int) -> int:
-    """Nodrošina derīgu (nepāra) block size adaptive threshold metodei."""
-    max_bs = min(h, w)
-    if max_bs % 2 == 0:
-        max_bs -= 1
-    max_bs = max(3, max_bs)
-    bs = int(bs)
-    bs = max(3, bs)
-    if bs % 2 == 0:
-        bs += 1
-    return min(bs, max_bs)
+        while queue:
+            r, c = queue.popleft()
+            for dr, dc in neighbors:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and label_map[nr, nc] == 0:
+                    if abs(int(gray[nr, nc]) - seed_intensity) < threshold:
+                        label_map[nr, nc] = region_id
+                        queue.append((nr, nc))
 
+    return label_map
 
-def auto_parametri(attels: np.ndarray) -> dict:
-    """Aprēķina drošus automātiskos parametrus konkrētam attēlam."""
-    h, w = attels.shape
-    std = np.std(attels)
-    min_dim = max(3, min(h, w))
-    block_size = max(3, min_dim // 12)
-    block_size = validet_bloka_izmeru(block_size, h, w)
-    C = int(np.clip(std * 0.06, 1, 30))
-    tolerance = int(np.clip(std * 0.2, 2, 35))
-    return {"block_size": block_size, "C": C, "tolerance": tolerance}
+def process_image(image_path: str) -> None:
+    img_bgr = cv2.imread(image_path)
+    if img_bgr is None:
+        print(f"[SKIP] Cannot read '{image_path}'")
+        return
 
+    print(f"[INFO] Processing '{image_path}'  "
+          f"size={img_bgr.shape[1]}x{img_bgr.shape[0]}")
 
-def apvienot_konfiguraciju(cfg: dict, auto_cfg: dict) -> dict:
-    """Atgriež per-attēla konfigurāciju bez globālās KONFIGURACIJA mutēšanas."""
-    rez = dict(cfg)
-    for key, value in auto_cfg.items():
-        if rez.get(key) is None:
-            rez[key] = value
-    return rez
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
 
+    seeds     = generate_seeds(h, w, GRID_SPACING)
+    label_map = region_growing(gray, seeds, INTENSITY_THRESHOLD)
+    segmented = np.where(label_map > 0, 255, 0).astype(np.uint8)
 
-def slieksnosana(attels: np.ndarray, cfg: dict) -> np.ndarray:
-    """Mean-neighborhood thresholding: T(x,y) = neighborhood average - C."""
-    h, w = attels.shape
-    if cfg.get("use_clahe", True):
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        attels = clahe.apply(attels)
-    median_blur = cfg.get("median_blur")
-    if isinstance(median_blur, int) and median_blur > 0:
-        blur_ksize = validet_bloka_izmeru(median_blur, h, w)
-        attels = cv2.medianBlur(attels, blur_ksize)
-
-    bs = validet_bloka_izmeru(cfg["block_size"], h, w)
-    C = int(np.clip(cfg["C"], 0, 50))
-    th = cv2.adaptiveThreshold(
-        attels,
-        255,
+    thresh_mean = cv2.adaptiveThreshold(
+        gray, 255,
         cv2.ADAPTIVE_THRESH_MEAN_C,
-        cv2.THRESH_BINARY_INV,
-        bs,
-        C,
+        cv2.THRESH_BINARY,
+        199, 5
     )
 
-    morph_kernel = int(cfg.get("morph_kernel", 3))
-    morph_kernel = validet_bloka_izmeru(morph_kernel, h, w)
-    k = np.ones((morph_kernel, morph_kernel), np.uint8)
-    if cfg.get("do_open", True):
-        th = cv2.morphologyEx(th, cv2.MORPH_OPEN, k)
-    if cfg.get("do_close", True):
-        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, k)
-    return th
+    segmented_bgr = cv2.cvtColor(segmented, cv2.COLOR_GRAY2BGR)
+    thresh_mean_bgr = cv2.cvtColor(thresh_mean, cv2.COLOR_GRAY2BGR)
 
+    num_regions = label_map.max()
+    print(f"[INFO] Regions found: {num_regions}")
 
-def seklas_no_slieksna(th_maska: np.ndarray, n: int, cfg: dict) -> list[tuple[int, int]]:
-    """Automātiski izvēlas sēklas no sliekšņa maskas, filtrējot pēc kontūru laukuma."""
-    konturas, _ = cv2.findContours(th_maska, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    h, w = th_maska.shape
-    img_area = h * w
-    min_area = int(cfg.get("seed_min_area", max(20, img_area * 0.001)))
-    max_area = int(cfg.get("seed_max_area", img_area * 0.7))
-    filtr_konturas = [cnt for cnt in konturas if min_area <= cv2.contourArea(cnt) <= max_area]
-    filtr_konturas = sorted(filtr_konturas, key=cv2.contourArea, reverse=True)
+    side_by_side = np.hstack([img_bgr, segmented_bgr, thresh_mean_bgr])
+    side_by_side[:, w] = (255, 255, 255)
+    side_by_side[:, 2 * w] = (255, 255, 255)
 
-    seklas = []
-    for cnt in filtr_konturas:
-        M = cv2.moments(cnt)
-        if M["m00"] > 0:
-            cx = int(M["m10"] / M["m00"])
-            cy = int(M["m01"] / M["m00"])
-            seklas.append((cy, cx))
-        if len(seklas) >= n:
-            break
-    return seklas
+    window_title = f"Original | Segmented | AdaptiveThresh — {os.path.basename(image_path)}"
+    cv2_imshow(side_by_side)
 
-
-def audzesana(
-    attels: np.ndarray,
-    seklas: list[tuple[int, int]],
-    tolerance: int,
-    max_pixels: int | None = None,
-) -> np.ndarray:
-    """
-    Region growing ar BFS.
-    max_pixels ir globāls limits (kopējais pikseļu skaits pāri visām sēklām).
-    """
-    h, w = attels.shape
-    maska = np.zeros((h, w), dtype=np.uint8)
-    apmeklets = np.zeros((h, w), dtype=bool)
-    tolerance = max(1, int(tolerance))
-    if max_pixels is not None:
-        max_pixels = max(1, int(max_pixels))
-
-    kopejais = 0
-    for sy, sx in seklas:
-        if max_pixels is not None and kopejais >= max_pixels:
-            break
-        if not (0 <= sy < h and 0 <= sx < w) or apmeklets[sy, sx]:
-            continue
-
-        sakuma_verts = int(attels[sy, sx])
-        rinda = deque([(sy, sx)])
-        apmeklets[sy, sx] = True
-        maska[sy, sx] = 255
-        kopejais += 1
-        summas = sakuma_verts
-        pikselu_skaits = 1
-
-        while rinda:
-            if max_pixels is not None and kopejais >= max_pixels:
-                break
-            y, x = rinda.popleft()
-            region_mean = int(round(summas / pikselu_skaits))
-            for dy, dx in KAIMINI_8:
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < h and 0 <= nx < w and not apmeklets[ny, nx]:
-                    apmeklets[ny, nx] = True
-                    if abs(int(attels[ny, nx]) - region_mean) <= tolerance:
-                        pikselis = int(attels[ny, nx])
-                        summas += pikselis
-                        pikselu_skaits += 1
-                        kopejais += 1
-                        maska[ny, nx] = 255
-                        rinda.append((ny, nx))
-                        if max_pixels is not None and kopejais >= max_pixels:
-                            break
-    return maska
-
-
-def notirit_mazus_rezultatus(maska: np.ndarray, min_area: int = 100) -> np.ndarray:
-    konturas, _ = cv2.findContours(maska, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    tira_maska = np.zeros_like(maska)
-    for cnt in konturas:
-        if cv2.contourArea(cnt) > min_area:
-            cv2.drawContours(tira_maska, [cnt], -1, 255, -1)
-    return tira_maska
-
-
-def izveidot_overlay(originals: np.ndarray, maska: np.ndarray) -> np.ndarray:
-    """Pārklāj segmentācijas masku uz oriģinālā attēla."""
-    if originals.ndim == 2:
-        bgr = cv2.cvtColor(originals, cv2.COLOR_GRAY2BGR)
-    else:
-        bgr = originals.copy()
-    overlay = bgr.copy()
-    overlay[maska > 0] = (0, 0, 255)
-    return cv2.addWeighted(bgr, 0.7, overlay, 0.3, 0)
-
-
-def atrast_attela_celu(base_dir: str, kandidati: list[str]) -> str | None:
-    """Atrod attēla ceļu: vispirms precīzs kandidāts, pēc tam fallback ar glob."""
-    for nosaukums in kandidati:
-        faila_cels = os.path.join(base_dir, nosaukums)
-        if os.path.isfile(faila_cels):
-            return faila_cels
-
-    for nosaukums in kandidati:
-        # Fallback ar glob tiek izmantots tikai kandidātiem bez paplašinājuma.
-        if os.path.splitext(nosaukums)[1]:
-            continue
-        rezultati = sorted(glob(os.path.join(base_dir, f"{nosaukums}*")))
-        for faila_cels in rezultati:
-            if os.path.isfile(faila_cels):
-                return faila_cels
-    return None
-
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    base_name   = os.path.splitext(os.path.basename(image_path))[0]
+    out_seg     = os.path.join(OUTPUT_DIR, f"{base_name}_segmented.png")
+    out_sbs     = os.path.join(OUTPUT_DIR, f"{base_name}_comparison.png")
+    cv2.imwrite(out_seg, segmented)
+    cv2.imwrite(out_sbs, side_by_side)
+    print(f"[INFO] Saved → {out_seg}")
+    print(f"[INFO] Saved → {out_sbs}")
 
 def main() -> None:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    out_dir = os.path.join(base_dir, "out")
-    os.makedirs(out_dir, exist_ok=True)
+    found = [p for p in TEST_IMAGES if os.path.isfile(p)]
+    if not found:
+        print("[ERROR] None of the listed test images were found.")
+        print("        Place image files next to this script and update TEST_IMAGES.")
+        return
 
-    for attela_id, cfg in KONFIGURACIJA.items():
-        kandidati = cfg.get("file_candidates", [f"{attela_id}.png"])
-        faila_cels = atrast_attela_celu(base_dir, kandidati)
-        if faila_cels is None:
-            print(f"Fails nav atrasts: {', '.join(kandidati)}")
-            continue
-
-        originals = cv2.imread(faila_cels)
-        attels = cv2.imread(faila_cels, cv2.IMREAD_GRAYSCALE)
-        if originals is None or attels is None:
-            if not os.path.exists(faila_cels):
-                print(f"Fails nav atrasts: {faila_cels}")
-            else:
-                print(f"Nevar nolasīt failu kā attēlu: {faila_cels}")
-            continue
-
-        auto_cfg = auto_parametri(attels)
-        merged_cfg = apvienot_konfiguraciju(cfg, auto_cfg)
-
-        rez_slieksnis = slieksnosana(attels, merged_cfg)
-
-        if merged_cfg["seklas"] is not None:
-            seklas = merged_cfg["seklas"]
-        else:
-            seklas = seklas_no_slieksna(rez_slieksnis, merged_cfg["n_seklas"], merged_cfg)
-
-        rez_audzesana = notirit_mazus_rezultatus(
-            audzesana(attels, seklas, merged_cfg["tolerance"], merged_cfg.get("max_pixels"))
-        )
-
-        baze = attela_id
-        overlay = izveidot_overlay(originals, rez_audzesana)
-
-        cv2.imwrite(os.path.join(out_dir, f"{baze}_original.png"), originals)
-        cv2.imwrite(os.path.join(out_dir, f"{baze}_threshold.png"), rez_slieksnis)
-        cv2.imwrite(os.path.join(out_dir, f"{baze}_region.png"), rez_audzesana)
-        cv2.imwrite(os.path.join(out_dir, f"{baze}_overlay.png"), overlay)
-
-        cv2_imshow(originals)
-        cv2_imshow(rez_slieksnis)
-        cv2_imshow(rez_audzesana)
-
+    for path in found:
+        process_image(path)
 
 if __name__ == "__main__":
     main()
