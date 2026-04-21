@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections import deque
+from glob import glob
 
 import cv2
 import numpy as np
@@ -14,15 +15,19 @@ except Exception:
         print("cv2_imshow pieejama tikai Colab vidē.")
 
 KONFIGURACIJA = {
-    "img1.png": {
-        "block_size": None,
-        "C": None,
-        "tolerance": None,
+    "img1": {
+        "file_candidates": ["img1.png", "img1 (1).png"],
+        "block_size": 81,
+        "C": 8,
+        "tolerance": 12,
         "seklas": None,
-        "n_seklas": 6,
+        "n_seklas": 8,
         "max_pixels": None,
+        "morph_kernel": 3,
+        "seed_min_area": 200,
     },
-    "img2.png": {
+    "img2": {
+        "file_candidates": ["img2.png"],
         "block_size": None,
         "C": None,
         "tolerance": None,
@@ -30,13 +35,16 @@ KONFIGURACIJA = {
         "n_seklas": 4,
         "max_pixels": None,
     },
-    "img3.png": {
-        "block_size": None,
-        "C": None,
-        "tolerance": 8,
+    "img3": {
+        "file_candidates": ["img3.png"],
+        "block_size": 61,
+        "C": 7,
+        "tolerance": 10,
         "seklas": None,
-        "n_seklas": 5,
-        "max_pixels": 50000,
+        "n_seklas": 6,
+        "max_pixels": None,
+        "morph_kernel": 3,
+        "seed_min_area": 150,
     },
 }
 
@@ -81,6 +89,13 @@ def apvienot_konfiguraciju(cfg: dict, auto_cfg: dict) -> dict:
 def slieksnosana(attels: np.ndarray, cfg: dict) -> np.ndarray:
     """Mean-neighborhood thresholding: T(x,y) = neighborhood average - C."""
     h, w = attels.shape
+    if cfg.get("use_clahe", True):
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        attels = clahe.apply(attels)
+    if cfg.get("median_blur", 3):
+        blur_ksize = validet_bloka_izmeru(cfg.get("median_blur", 3), h, w)
+        attels = cv2.medianBlur(attels, blur_ksize)
+
     bs = validet_bloka_izmeru(cfg["block_size"], h, w)
     C = int(np.clip(cfg["C"], 0, 50))
     th = cv2.adaptiveThreshold(
@@ -197,18 +212,41 @@ def izveidot_overlay(originals: np.ndarray, maska: np.ndarray) -> np.ndarray:
     return cv2.addWeighted(bgr, 0.7, overlay, 0.3, 0)
 
 
+def atrast_attela_celu(base_dir: str, kandidati: list[str]) -> str | None:
+    for nosaukums in kandidati:
+        cela = os.path.join(base_dir, nosaukums)
+        if os.path.isfile(cela):
+            return cela
+
+    for nosaukums in kandidati:
+        if os.path.splitext(nosaukums)[1]:
+            continue
+        rezultati = sorted(glob(os.path.join(base_dir, f"{nosaukums}*")))
+        for cela in rezultati:
+            if os.path.isfile(cela):
+                return cela
+    return None
+
+
 def main() -> None:
-    out_dir = "out"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.path.join(base_dir, "out")
     os.makedirs(out_dir, exist_ok=True)
 
-    for faila_nosaukums, cfg in KONFIGURACIJA.items():
-        originals = cv2.imread(faila_nosaukums)
-        attels = cv2.imread(faila_nosaukums, cv2.IMREAD_GRAYSCALE)
+    for attela_id, cfg in KONFIGURACIJA.items():
+        kandidati = cfg.get("file_candidates", [f"{attela_id}.png"])
+        faila_cels = atrast_attela_celu(base_dir, kandidati)
+        if faila_cels is None:
+            print(f"Fails nav atrasts: {', '.join(kandidati)}")
+            continue
+
+        originals = cv2.imread(faila_cels)
+        attels = cv2.imread(faila_cels, cv2.IMREAD_GRAYSCALE)
         if originals is None or attels is None:
-            if not os.path.exists(faila_nosaukums):
-                print(f"Fails nav atrasts: {faila_nosaukums}")
+            if not os.path.exists(faila_cels):
+                print(f"Fails nav atrasts: {faila_cels}")
             else:
-                print(f"Nevar nolasīt failu kā attēlu: {faila_nosaukums}")
+                print(f"Nevar nolasīt failu kā attēlu: {faila_cels}")
             continue
 
         auto_cfg = auto_parametri(attels)
@@ -225,7 +263,7 @@ def main() -> None:
             audzesana(attels, seklas, merged_cfg["tolerance"], merged_cfg.get("max_pixels"))
         )
 
-        baze = os.path.splitext(os.path.basename(faila_nosaukums))[0]
+        baze = attela_id
         overlay = izveidot_overlay(originals, rez_audzesana)
 
         cv2.imwrite(os.path.join(out_dir, f"{baze}_original.png"), originals)
