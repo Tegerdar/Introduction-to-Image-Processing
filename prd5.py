@@ -27,6 +27,7 @@ KONFIGURACIJA = {
         "morph_kernel": 3,
         # Minimālais kontūras laukums automātiskām sēklām.
         "seed_min_area": 200,
+        "median_blur": 3,
     },
     "img2": {
         "file_candidates": ["img2.png"],
@@ -37,6 +38,7 @@ KONFIGURACIJA = {
         "n_seklas": 4,
         "max_pixels": None,
         "use_clahe": False,
+        "median_blur": 3,
     },
     "img3": {
         "file_candidates": ["img3.png"],
@@ -50,6 +52,7 @@ KONFIGURACIJA = {
         "morph_kernel": 3,
         # Minimālais kontūras laukums automātiskām sēklām.
         "seed_min_area": 150,
+        "median_blur": 3,
     },
 }
 
@@ -97,8 +100,8 @@ def slieksnosana(attels: np.ndarray, cfg: dict) -> np.ndarray:
     if cfg.get("use_clahe", True):
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         attels = clahe.apply(attels)
-    median_blur = cfg.get("median_blur", 3)
-    if median_blur is not None:
+    median_blur = cfg.get("median_blur")
+    if isinstance(median_blur, int) and median_blur > 0:
         blur_ksize = validet_bloka_izmeru(median_blur, h, w)
         attels = cv2.medianBlur(attels, blur_ksize)
 
@@ -226,6 +229,7 @@ def atrast_attela_celu(base_dir: str, kandidati: list[str]) -> str | None:
             return faila_cels
 
     for nosaukums in kandidati:
+        # Fallback ar glob tiek izmantots tikai kandidātiem bez paplašinājuma.
         if os.path.splitext(nosaukums)[1]:
             continue
         rezultati = sorted(glob(os.path.join(base_dir, f"{nosaukums}*")))
